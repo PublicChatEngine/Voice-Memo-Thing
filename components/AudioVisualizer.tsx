@@ -8,7 +8,8 @@ interface AudioVisualizerProps {
 
 const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording, stream }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
+  // Fix: Provide initial value to useRef to resolve "Expected 1 arguments, but got 0" error.
+  const animationRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (!isRecording || !stream || !canvasRef.current) return;

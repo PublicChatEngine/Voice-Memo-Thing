@@ -12,8 +12,8 @@ const TranscriptionCard: React.FC<TranscriptionCardProps> = ({ snippet }) => {
     return parts.map((part, i) => {
       if (part.startsWith('[') && part.endsWith(']')) {
         return (
-          <span key={i} className="text-indigo-400 font-medium text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 mx-1 uppercase tracking-tighter">
-            {part}
+          <span key={i} className="text-indigo-400 font-bold text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/10 mx-1 uppercase tracking-widest inline-block align-middle">
+            {part.slice(1, -1)}
           </span>
         );
       }
@@ -22,10 +22,13 @@ const TranscriptionCard: React.FC<TranscriptionCardProps> = ({ snippet }) => {
   };
 
   return (
-    <div className={`transition-all duration-700 ${snippet.isFinal ? 'opacity-100' : 'opacity-40 animate-pulse'}`}>
-      <p className="text-zinc-400 font-light leading-relaxed tracking-tight">
+    <div className={`group transition-all duration-500 border-l-2 ${snippet.isFinal ? 'opacity-100 border-indigo-500/50' : 'opacity-40 border-zinc-800 animate-pulse'} pl-6 py-2`}>
+      <p className="text-zinc-300 font-normal leading-relaxed text-[15px] tracking-tight">
         {formatText(snippet.text)}
       </p>
+      <span className="text-[9px] text-zinc-600 font-medium uppercase tracking-widest mt-2 block">
+        {new Date(snippet.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+      </span>
     </div>
   );
 };
