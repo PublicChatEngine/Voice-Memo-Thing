@@ -13,7 +13,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording, stream }
   useEffect(() => {
     if (!isRecording || !stream || !canvasRef.current) return;
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    // Fix: Pass an options object to AudioContext constructor to resolve "Expected 1 arguments, but got 0" error.
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 44100 });
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;

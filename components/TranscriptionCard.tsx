@@ -12,7 +12,7 @@ const TranscriptionCard: React.FC<TranscriptionCardProps> = ({ snippet }) => {
     return parts.map((part, i) => {
       if (part.startsWith('[') && part.endsWith(']')) {
         return (
-          <span key={i} className="text-indigo-400 font-bold opacity-80 uppercase text-[10px] tracking-widest px-1">
+          <span key={i} className="text-indigo-400 font-medium text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 mx-1 uppercase tracking-tighter">
             {part}
           </span>
         );
@@ -22,8 +22,8 @@ const TranscriptionCard: React.FC<TranscriptionCardProps> = ({ snippet }) => {
   };
 
   return (
-    <div className={`transition-opacity duration-500 ${snippet.isFinal ? 'opacity-100' : 'opacity-50 animate-pulse'}`}>
-      <p className="text-zinc-300 leading-relaxed text-[15px]">
+    <div className={`transition-all duration-700 ${snippet.isFinal ? 'opacity-100' : 'opacity-40 animate-pulse'}`}>
+      <p className="text-zinc-400 font-light leading-relaxed tracking-tight">
         {formatText(snippet.text)}
       </p>
     </div>

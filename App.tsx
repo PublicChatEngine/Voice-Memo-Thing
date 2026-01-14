@@ -16,7 +16,6 @@ const App: React.FC = () => {
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -29,44 +28,15 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleLiveTranscription = useCallback((text: string, isFinal: boolean) => {
-    setState(prev => {
-      if (!prev.activeSessionId) return prev;
-      const sessions = [...prev.sessions];
-      const sessionIndex = sessions.findIndex(s => s.id === prev.activeSessionId);
-      if (sessionIndex === -1) return prev;
-
-      const session = sessions[sessionIndex];
-      const lastSnippet = session.snippets[session.snippets.length - 1];
-
-      if (lastSnippet && !lastSnippet.isFinal) {
-        session.snippets[session.snippets.length - 1] = {
-          ...lastSnippet,
-          text: lastSnippet.text + " " + text,
-          isFinal: isFinal,
-        };
-      } else {
-        session.snippets.push({
-          id: Math.random().toString(36).substr(2, 9),
-          text,
-          timestamp: Date.now(),
-          isFinal,
-        });
-      }
-
-      return { ...prev, sessions };
-    });
-  }, []);
-
   const startRecording = async () => {
     try {
       const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setStream(audioStream);
 
-      const sessionId = `live-${Date.now()}`;
-      const newSession: RecordingSession = {
-        id: sessionId,
-        name: `Live Note ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      const id = `live-${Date.now()}`;
+      const session: RecordingSession = {
+        id,
+        name: `Voice Note ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
         snippets: [],
         formattedText: null,
         status: 'transcribing',
@@ -76,113 +46,105 @@ const App: React.FC = () => {
       setState(prev => ({
         ...prev,
         isRecording: true,
-        sessions: [newSession, ...prev.sessions],
-        activeSessionId: sessionId,
-        error: null
+        sessions: [session, ...prev.sessions],
+        activeSessionId: id
       }));
 
       const sessionPromise = createLiveSession(
-        handleLiveTranscription,
-        (err) => setState(prev => ({ ...prev, error: "Connection error." }))
+        (text, isFinal) => {
+          setState(prev => {
+            const sessions = [...prev.sessions];
+            const idx = sessions.findIndex(s => s.id === id);
+            if (idx === -1) return prev;
+            
+            const last = sessions[idx].snippets[sessions[idx].snippets.length - 1];
+            if (last && !last.isFinal) {
+              sessions[idx].snippets[sessions[idx].snippets.length - 1].text += " " + text;
+              sessions[idx].snippets[sessions[idx].snippets.length - 1].isFinal = isFinal;
+            } else {
+              sessions[idx].snippets.push({ id: Math.random().toString(), text, timestamp: Date.now(), isFinal });
+            }
+            return { ...prev, sessions };
+          });
+        },
+        () => setState(prev => ({ ...prev, error: "Recording interrupted." }))
       );
-      sessionPromiseRef.current = sessionPromise;
 
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const audioContext = new AudioContext({ sampleRate: 16000 });
       audioContextRef.current = audioContext;
-
       const source = audioContext.createMediaStreamSource(audioStream);
       const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-
       scriptProcessor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcmBlob = createBlob(inputData);
-        sessionPromise.then((session) => {
-          if (session) session.sendRealtimeInput({ media: pcmBlob });
-        });
+        const blob = createBlob(e.inputBuffer.getChannelData(0));
+        sessionPromise.then(s => s.sendRealtimeInput({ media: blob }));
       };
-
       source.connect(scriptProcessor);
       scriptProcessor.connect(audioContext.destination);
-    } catch (err) {
+    } catch (e) {
       setState(prev => ({ ...prev, error: "Microphone access denied." }));
     }
   };
 
   const stopRecording = () => {
-    if (audioContextRef.current) audioContextRef.current.close();
-    if (stream) stream.getTracks().forEach(track => track.stop());
+    audioContextRef.current?.close();
+    stream?.getTracks().forEach(t => t.stop());
     setStream(null);
-    if (state.activeSessionId) updateSession(state.activeSessionId, { status: 'idle' });
+    if (state.activeSessionId) {
+      updateSession(state.activeSessionId, { status: 'idle' });
+      handleSmartFormat(state.activeSessionId);
+    }
     setState(prev => ({ ...prev, isRecording: false }));
   };
 
   const processFiles = async (files: FileList) => {
-    const newSessions: RecordingSession[] = Array.from(files).map(file => ({
+    const sessions: RecordingSession[] = Array.from(files).map(f => ({
       id: `file-${Math.random().toString(36).substr(2, 9)}`,
-      name: file.name,
+      name: f.name,
       snippets: [],
       formattedText: null,
       status: 'transcribing',
       timestamp: Date.now(),
     }));
 
-    setState(prev => ({
-      ...prev,
-      sessions: [...newSessions, ...prev.sessions],
-      activeSessionId: newSessions[0].id
-    }));
+    setState(prev => ({ ...prev, sessions: [...sessions, ...prev.sessions], activeSessionId: sessions[0].id }));
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const session = newSessions[i];
-      
+      const session = sessions[i];
       try {
-        const reader = new FileReader();
-        const base64Data = await new Promise<string>((resolve) => {
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.readAsDataURL(file);
+        const base64 = await new Promise<string>(r => {
+          const rd = new FileReader();
+          rd.onload = () => r((rd.result as string).split(',')[1]);
+          rd.readAsDataURL(file);
         });
 
-        const transcription = await transcribeAudioFile(base64Data, file.type);
-        const rawSnippets = transcription.match(/[^\.!\?]+[\.!\?]+/g) || [transcription];
-        const processedSnippets: TranscriptionSnippet[] = rawSnippets.map((text, idx) => ({
-          id: `${session.id}-${idx}`,
-          text: text.trim(),
-          timestamp: Date.now(),
-          isFinal: true
-        }));
-
+        const raw = await transcribeAudioFile(base64, file.type);
+        const formatted = await formatTranscription(raw);
         updateSession(session.id, { 
-          snippets: processedSnippets, 
-          status: 'formatting' 
-        });
-
-        const formatted = await formatTranscription(transcription);
-        updateSession(session.id, { 
+          snippets: [{ id: '1', text: raw, timestamp: Date.now(), isFinal: true }], 
           formattedText: formatted, 
           status: 'completed' 
         });
-      } catch (err) {
+      } catch {
         updateSession(session.id, { status: 'error' });
       }
     }
   };
 
-  const smartFormat = async (sessionId: string) => {
-    const session = state.sessions.find(s => s.id === sessionId);
-    if (!session || session.snippets.length === 0) return;
-
-    updateSession(sessionId, { status: 'formatting' });
+  const handleSmartFormat = async (id: string) => {
+    const session = state.sessions.find(s => s.id === id);
+    if (!session) return;
+    updateSession(id, { status: 'formatting' });
     try {
-      const rawText = session.snippets.map(s => s.text).join(" ");
-      const formatted = await formatTranscription(rawText);
-      updateSession(sessionId, { formattedText: formatted, status: 'completed' });
-    } catch (err) {
-      updateSession(sessionId, { status: 'error' });
+      const text = session.snippets.map(s => s.text).join(" ");
+      const formatted = await formatTranscription(text);
+      updateSession(id, { formattedText: formatted, status: 'completed' });
+    } catch {
+      updateSession(id, { status: 'error' });
     }
   };
 
-  const downloadText = (session: RecordingSession) => {
+  const download = (session: RecordingSession) => {
     const content = session.formattedText || session.snippets.map(s => s.text).join("\n");
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -190,184 +152,144 @@ const App: React.FC = () => {
     a.href = url;
     a.download = `${session.name.replace(/\.[^/.]+$/, "")}.txt`;
     a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const removeSession = (id: string) => {
-    setState(prev => ({
-      ...prev,
-      sessions: prev.sessions.filter(s => s.id !== id),
-      activeSessionId: prev.activeSessionId === id ? (prev.sessions[0]?.id || null) : prev.activeSessionId
-    }));
   };
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-[#fafafa] selection:bg-indigo-500/30">
-      {/* Navigation Sidebar-ish Header */}
-      <div className="max-w-6xl mx-auto px-6 pt-12 pb-24 grid grid-cols-1 lg:grid-cols-12 gap-12">
-        
-        {/* Left: Controls & Session List */}
-        <aside className="lg:col-span-4 space-y-8">
-          <div className="space-y-2">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">VocalCanvas</h1>
-            <p className="text-zinc-500 text-sm">Minimalist voice notes & smart formatting.</p>
+    <div className="flex h-screen bg-black text-zinc-100 overflow-hidden">
+      {/* Library Sidebar */}
+      <aside className="w-80 border-r border-zinc-900 flex flex-col p-6 space-y-8 bg-[#020202]">
+        <div className="space-y-1">
+          <h1 className="text-xl font-bold tracking-tighter">VocalCanvas</h1>
+          <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-bold">Transcription Engine</p>
+        </div>
+
+        <div className="space-y-3">
+          <button 
+            onClick={state.isRecording ? stopRecording : startRecording}
+            className={`w-full py-3.5 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition-all active:scale-95 ${
+              state.isRecording ? 'bg-red-500 text-white' : 'bg-white text-black hover:bg-zinc-200'
+            }`}
+          >
+            <div className={`w-2 h-2 rounded-full ${state.isRecording ? 'bg-white animate-pulse' : 'bg-red-500'}`} />
+            {state.isRecording ? 'Stop Recording' : 'New Voice Note'}
+          </button>
+
+          <div 
+            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files) processFiles(e.dataTransfer.files); }}
+            onClick={() => fileInputRef.current?.click()}
+            className={`cursor-pointer border border-dashed rounded-2xl p-6 text-center transition-all ${
+              isDragging ? 'border-indigo-500 bg-indigo-500/5' : 'border-zinc-800 hover:border-zinc-700'
+            }`}
+          >
+            <input type="file" ref={fileInputRef} multiple className="hidden" accept="audio/*" onChange={(e) => e.target.files && processFiles(e.target.files)} />
+            <p className="text-xs font-semibold text-zinc-500">Drop audio files</p>
           </div>
+        </div>
 
-          <div className="space-y-4">
-            {!state.isRecording ? (
-              <button 
-                onClick={startRecording}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-white text-black rounded-xl font-medium transition-transform active:scale-[0.98] hover:bg-zinc-200"
-              >
-                <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" />
-                Live Note
-              </button>
-            ) : (
-              <button 
-                onClick={stopRecording}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-xl font-medium transition-transform active:scale-[0.98]"
-              >
-                Stop Recording
-              </button>
-            )}
-
+        <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
+          <h3 className="text-[10px] font-bold text-zinc-700 mb-4 px-1 uppercase tracking-widest">Library</h3>
+          {state.sessions.map(s => (
             <div 
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files) processFiles(e.dataTransfer.files); }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`group cursor-pointer border-2 border-dashed rounded-2xl p-8 transition-all flex flex-col items-center justify-center text-center space-y-2 ${
-                isDragging ? 'border-indigo-500 bg-indigo-500/5' : 'border-zinc-800 hover:border-zinc-700'
+              key={s.id} 
+              onClick={() => setState(prev => ({ ...prev, activeSessionId: s.id }))}
+              className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors ${
+                state.activeSessionId === s.id ? 'bg-zinc-900' : 'hover:bg-zinc-900/40'
               }`}
             >
-              <input type="file" ref={fileInputRef} multiple className="hidden" accept="audio/*" onChange={(e) => e.target.files && processFiles(e.target.files)} />
-              <svg className="w-6 h-6 text-zinc-500 group-hover:text-zinc-300 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-              </svg>
-              <span className="text-sm font-medium text-zinc-400">Dump files here</span>
-              <span className="text-xs text-zinc-600">MP3, WAV, M4A</span>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 px-1">Recent Notes</h3>
-            <div className="space-y-1">
-              {state.sessions.map(s => (
-                <div 
-                  key={s.id}
-                  onClick={() => setState(prev => ({ ...prev, activeSessionId: s.id }))}
-                  className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
-                    state.activeSessionId === s.id ? 'bg-zinc-900 border border-zinc-800' : 'hover:bg-zinc-900/50'
-                  }`}
-                >
-                  <div className="flex flex-col min-w-0">
-                    <span className={`text-sm font-medium truncate ${state.activeSessionId === s.id ? 'text-white' : 'text-zinc-400'}`}>
-                      {s.name}
-                    </span>
-                    <span className="text-[10px] text-zinc-600">
-                      {s.status === 'completed' ? 'Ready' : s.status}
-                    </span>
-                  </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); removeSession(s.id); }}
-                    className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
-                </div>
-              ))}
-              {state.sessions.length === 0 && (
-                <div className="py-8 text-center border border-zinc-900 rounded-xl border-dashed">
-                  <span className="text-xs text-zinc-700">No notes yet</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </aside>
-
-        {/* Right: Focused View */}
-        <main className="lg:col-span-8 space-y-8">
-          {activeSession ? (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
-                <div>
-                  <h2 className="text-xl font-medium text-white">{activeSession.name}</h2>
-                  <p className="text-zinc-500 text-sm">Created {new Date(activeSession.timestamp).toLocaleDateString()}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {activeSession.status === 'idle' && (
-                    <button 
-                      onClick={() => smartFormat(activeSession.id)}
-                      className="px-4 py-1.5 rounded-full border border-indigo-500/50 text-indigo-400 text-sm hover:bg-indigo-500/10 transition-colors"
-                    >
-                      Format Note
-                    </button>
-                  )}
-                  <button 
-                    onClick={() => downloadText(activeSession)}
-                    className="px-4 py-1.5 rounded-full border border-zinc-800 text-zinc-400 text-sm hover:bg-zinc-800 transition-colors flex items-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                    Download .txt
-                  </button>
-                </div>
+              <div className="min-w-0 flex-1">
+                <p className={`text-xs font-semibold truncate ${state.activeSessionId === s.id ? 'text-white' : 'text-zinc-500'}`}>{s.name}</p>
+                <p className="text-[10px] text-zinc-700 font-medium mt-0.5">{s.status}</p>
               </div>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setState(prev => ({ ...prev, sessions: prev.sessions.filter(x => x.id !== s.id) })) }}
+                className="opacity-0 group-hover:opacity-100 p-1 text-zinc-700 hover:text-red-400"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      </aside>
 
-              {state.isRecording && activeSession.id === state.activeSessionId && (
-                <div className="mb-6 p-4 bg-zinc-900/50 rounded-2xl border border-zinc-800/50 flex items-center justify-center">
-                  <AudioVisualizer isRecording={state.isRecording} stream={stream} />
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 gap-12">
-                {activeSession.formattedText ? (
-                  <div className="prose prose-invert max-w-none">
-                    <div className="bg-zinc-900/30 rounded-3xl p-8 border border-zinc-800/40 shadow-inner">
-                      {activeSession.formattedText.split('\n').map((line, i) => (
-                        <p key={i} className="mb-2 last:mb-0">
-                          {line.split(/(\[.*?\])/g).map((part, j) => {
-                            if (part.startsWith('[') && part.endsWith(']')) {
-                              return <span key={j} className="text-indigo-400 font-bold opacity-80">{part}</span>;
-                            }
-                            return part;
-                          })}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {activeSession.status === 'transcribing' && (
-                      <div className="flex items-center gap-3 text-zinc-500 p-4 border border-zinc-900 rounded-2xl animate-pulse">
-                        <div className="w-4 h-4 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
-                        <span className="text-sm">Transcribing voice note...</span>
-                      </div>
-                    )}
-                    {activeSession.snippets.map(s => (
-                      <TranscriptionCard key={s.id} snippet={s} />
-                    ))}
-                    {activeSession.snippets.length === 0 && activeSession.status !== 'transcribing' && (
-                      <div className="py-24 text-center border border-zinc-900 rounded-3xl border-dashed">
-                        <p className="text-zinc-600">Start speaking or wait for upload...</p>
-                      </div>
-                    )}
-                  </div>
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col relative">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,_#111111_0%,_#000000_100%)] pointer-events-none" />
+        
+        {activeSession ? (
+          <div className="relative z-10 flex flex-col h-full p-12 lg:p-20 overflow-y-auto custom-scrollbar">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 mb-16">
+              <div className="space-y-2">
+                <h2 className="text-4xl font-bold tracking-tighter text-white">{activeSession.name}</h2>
+                <p className="text-zinc-600 text-sm font-medium uppercase tracking-widest">
+                  {new Date(activeSession.timestamp).toLocaleDateString()} &bull; {activeSession.status}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                {activeSession.status === 'idle' && (
+                  <button 
+                    onClick={() => handleSmartFormat(activeSession.id)}
+                    className="px-6 py-2.5 rounded-full bg-indigo-600 text-white text-xs font-bold transition-all hover:bg-indigo-500"
+                  >
+                    Smart Format
+                  </button>
                 )}
+                <button 
+                  onClick={() => download(activeSession)}
+                  className="px-6 py-2.5 rounded-full border border-zinc-800 text-zinc-400 text-xs font-bold hover:bg-zinc-900 transition-all flex items-center gap-2"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                  Export TXT
+                </button>
               </div>
+            </header>
+
+            {state.isRecording && activeSession.id === state.activeSessionId && (
+              <div className="mb-12 py-10 flex items-center justify-center bg-zinc-900/20 rounded-[3rem] border border-zinc-800/40">
+                <AudioVisualizer isRecording={state.isRecording} stream={stream} />
+              </div>
+            )}
+
+            <div className="max-w-3xl space-y-10">
+              {activeSession.formattedText ? (
+                <div className="animate-in fade-in duration-1000">
+                  <div className="text-zinc-200 leading-[1.8] text-lg font-light space-y-8 whitespace-pre-wrap">
+                    {activeSession.formattedText.split('\n').map((line, i) => (
+                      <p key={i}>
+                        {line.split(/(\[.*?\])/g).map((part, j) => {
+                          if (part.startsWith('[') && part.endsWith(']')) {
+                            return <span key={j} className="text-indigo-400 font-bold opacity-70 border-b border-indigo-500/20">{part}</span>;
+                          }
+                          return part;
+                        })}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {activeSession.status === 'transcribing' && (
+                    <div className="flex items-center gap-4 text-indigo-400/80 mb-8 animate-pulse">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                      <span className="text-[10px] font-bold uppercase tracking-widest">Listening in real-time</span>
+                    </div>
+                  )}
+                  {activeSession.snippets.map(s => <TranscriptionCard key={s.id} snippet={s} />)}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-4 opacity-20">
-              <svg className="w-16 h-16 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-              <h2 className="text-lg font-medium">Select or create a note</h2>
-            </div>
-          )}
-        </main>
-      </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center text-center opacity-10">
+            <svg className="w-20 h-20 mb-6 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+            <p className="text-sm font-medium tracking-tighter">Ready to capture.</p>
+          </div>
+        )}
+      </main>
 
       {state.error && (
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600/90 backdrop-blur px-4 py-2 rounded-full text-xs font-bold text-white shadow-2xl z-50 animate-bounce">
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 px-6 py-2 bg-red-500/90 text-white rounded-full text-xs font-bold shadow-2xl z-50">
           {state.error}
         </div>
       )}
