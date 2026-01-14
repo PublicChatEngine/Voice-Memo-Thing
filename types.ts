@@ -13,6 +13,7 @@ export interface RecordingSession {
   formattedText: string | null;
   status: 'idle' | 'transcribing' | 'formatting' | 'completed' | 'error';
   timestamp: number;
+  lastEdited: number;
 }
 
 export interface AppState {
