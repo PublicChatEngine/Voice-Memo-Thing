@@ -7,13 +7,12 @@ interface TranscriptionCardProps {
 }
 
 const TranscriptionCard: React.FC<TranscriptionCardProps> = ({ snippet }) => {
-  // Simple regex to highlight bracketed noise markers
   const formatText = (text: string) => {
     const parts = text.split(/(\[.*?\])/g);
     return parts.map((part, i) => {
       if (part.startsWith('[') && part.endsWith(']')) {
         return (
-          <span key={i} className="px-2 py-0.5 mx-1 text-xs font-bold uppercase tracking-wider rounded bg-indigo-900/40 text-indigo-300 border border-indigo-500/30">
+          <span key={i} className="text-indigo-400 font-bold opacity-80 uppercase text-[10px] tracking-widest px-1">
             {part}
           </span>
         );
@@ -23,20 +22,8 @@ const TranscriptionCard: React.FC<TranscriptionCardProps> = ({ snippet }) => {
   };
 
   return (
-    <div className={`p-4 mb-3 rounded-xl border transition-all duration-300 ${
-      snippet.isFinal 
-        ? 'bg-slate-800/40 border-slate-700/50 shadow-sm' 
-        : 'bg-slate-800/20 border-indigo-500/20 animate-pulse'
-    }`}>
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] font-mono text-slate-500">
-          {new Date(snippet.timestamp).toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' })}
-        </span>
-        {!snippet.isFinal && (
-          <span className="flex h-2 w-2 rounded-full bg-indigo-500"></span>
-        )}
-      </div>
-      <p className="text-slate-200 leading-relaxed font-medium">
+    <div className={`transition-opacity duration-500 ${snippet.isFinal ? 'opacity-100' : 'opacity-50 animate-pulse'}`}>
+      <p className="text-zinc-300 leading-relaxed text-[15px]">
         {formatText(snippet.text)}
       </p>
     </div>
