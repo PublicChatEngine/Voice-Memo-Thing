@@ -1,0 +1,7 @@
+{
+  "name": "VocalCanvas - Smart Transcription",
+  "description": "A sophisticated voice-to-text application that uses the Gemini Live API for real-time transcription with environmental sound detection and AI-powered structural formatting.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
